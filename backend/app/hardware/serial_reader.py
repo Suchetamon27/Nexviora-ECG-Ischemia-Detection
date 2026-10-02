@@ -151,10 +151,14 @@ class SerialECGReader:
             try:
                 line = await asyncio.to_thread(self._serial.readline)
                 if not line:
-                    await asyncio.sleep(0.005)
+                    await asyncio.sleep(0.01)
                     continue
 
                 decoded = line.decode("utf-8", errors="ignore").strip()
+                if decoded.startswith("REC,") or decoded.startswith("#"):
+                    pass # regular traffic
+                else:
+                    print(f"[SerialReader Debug] Received: {decoded[:80]}")
 
                 parsed = self._parse_rec_line(decoded)
                 if parsed:
@@ -188,6 +192,8 @@ class SerialECGReader:
                         batch_ecg.clear()
                         batch_ir.clear()
                         seq += 1
+                        if seq % 10 == 0:
+                            print(f"[SerialReader] Emitted 10 packets (250 samples/s). Latest HR: {last_hr} BPM")
                         yield packet
 
             except serial.SerialException as se:
