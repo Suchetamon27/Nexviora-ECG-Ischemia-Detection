@@ -15,10 +15,15 @@ class StreamManager:
 
     async def broadcast(self, message: dict) -> None:
         disconnected = []
-        for websocket in list(self.clients):
+        clients_list = list(self.clients)
+        if not clients_list:
+            return
+
+        for websocket in clients_list:
             try:
                 await websocket.send_json(message)
-            except Exception:
+            except Exception as e:
+                print(f"[StreamManager Broadcast Error] {type(e).__name__}: {e}")
                 disconnected.append(websocket)
 
         for websocket in disconnected:

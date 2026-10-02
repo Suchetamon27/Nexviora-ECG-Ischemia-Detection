@@ -12,7 +12,7 @@ from .config import settings
 from .hardware.serial_reader import SerialECGReader
 from .signal.pipeline import SignalPipeline
 from .inference.window import ECGWindow
-from .streaming.manager import StreamManager
+from .streaming.manager import stream_manager
 from .inference.laya_client import LayaClient
 from .inference.worker import InferenceWorker
 
@@ -26,7 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-stream_manager = StreamManager()
 reader = SerialECGReader(port=settings.serial_port, baudrate=settings.serial_baudrate)
 signal_pipeline = SignalPipeline()
 ecg_window = ECGWindow(
