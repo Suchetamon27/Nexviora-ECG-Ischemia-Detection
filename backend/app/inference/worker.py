@@ -29,6 +29,7 @@ class InferenceWorker:
             chunk_id = self.chunk_counter
 
             try:
+                raw_ecg_data = chunk.get("raw_ecg", [])
                 ecg_data = chunk.get("ecg", [])
                 motion_data = chunk.get("motion", [])
                 lead_off_data = chunk.get("lead_off", [])
@@ -38,15 +39,21 @@ class InferenceWorker:
                 roll = chunk.get("roll", 0.0)
                 latest_motion = chunk.get("motion_latest", 1.0)
 
-                # Generate high-resolution ECG strip image for visual inspection
-                title_str = f"Chunk #{chunk_id} (5.0s) · HR: {hr:.1f} BPM"
-                image_b64 = generate_ecg_strip_image(ecg_data, fs=250, title=title_str)
+                # -------------------------------------------------------------
+                # DEEP CLINICAL CLEANING: Filter 50Hz mains + baseline drift
+                # -------------------------------------------------------------
+                source_ecg = raw_ecg_data if (raw_ecg_data and len(raw_ecg_data) >= 200) else ecg_data
+                cleaned_ecg = self.signal_pipeline.filter.clean_5s_chunk(source_ecg)
+
+                # Generate clean high-resolution ECG strip image for visual inspection
+                title_str = f"Chunk #{chunk_id} (5.0s Cleaned) · HR: {hr:.1f} BPM"
+                image_b64 = generate_ecg_strip_image(cleaned_ecg, fs=250, title=title_str)
 
                 # -------------------------------------------------------------
                 # PASS 1: Quality and Noise Gate (60-70% noise threshold window)
                 # -------------------------------------------------------------
                 quality_info = self.signal_pipeline.evaluate_5s_window_quality(
-                    ecg_data, motion_data, lead_off_data
+                    cleaned_ecg, motion_data, lead_off_data
                 )
 
                 if quality_info["is_rejected"]:
@@ -81,15 +88,15 @@ class InferenceWorker:
                     continue
 
                 # -------------------------------------------------------------
-                # PASS 2: Clinical Ischemia Inference via Laya Model
+                # PASS 2: Clinical Ischemia Inference via Laya Model on CLEANED DATA
                 # -------------------------------------------------------------
-                # Extract clinical electrocardiological features
-                clinical_state = extract_ecg_clinical_features(ecg_data, hr=hr, fs=250)
+                # Extract clinical electrocardiological features from the cleaned signal
+                clinical_state = extract_ecg_clinical_features(cleaned_ecg, hr=hr, fs=250)
                 clinical_state["noise_percentage"] = quality_info["noise_percentage"]
                 clinical_state["motion_g"] = latest_motion
                 clinical_state["spo2_pct"] = spo2
 
-                # Run Laya prediction
+                # Run Laya prediction on clean data
                 laya_result = await self.client.infer(clinical_state)
 
                 result_payload = {
