@@ -6,3 +6,4 @@ scipy
 httpx
 pydantic-settings
 matplotlib
+laya

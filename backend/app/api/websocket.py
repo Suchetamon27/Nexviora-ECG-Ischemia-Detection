@@ -1,19 +1,16 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-
-from ..streaming.manager import StreamManager
-
+from ..streaming.manager import stream_manager
 
 router = APIRouter()
 
-manager = StreamManager()
-
-
 @router.websocket("/ws/live")
 async def live_stream(websocket: WebSocket):
-    await manager.connect(websocket)
-
+    await stream_manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()
+            # Keep connection alive & listen for client messages
+            msg = await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        stream_manager.disconnect(websocket)
+    except Exception:
+        stream_manager.disconnect(websocket)
