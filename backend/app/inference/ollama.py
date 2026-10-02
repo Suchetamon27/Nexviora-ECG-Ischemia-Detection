@@ -20,6 +20,7 @@ class OllamaECGClient:
         image_bytes: bytes,
         system_prompt: str,
         user_prompt: str,
+        format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
@@ -39,6 +40,8 @@ class OllamaECGClient:
             "stream": False,
             "temperature": self.temperature,
         }
+        if format is not None:
+            payload["format"] = format
 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(

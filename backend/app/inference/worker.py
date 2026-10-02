@@ -13,12 +13,14 @@ class InferenceWorker:
         result_callback: Callable,
         system_prompt: str,
         user_prompt: str,
+        format_schema: dict | None = None,
     ) -> None:
         self.client = client
         self.window_queue = window_queue
         self.result_callback = result_callback
         self.system_prompt = system_prompt
         self.user_prompt = user_prompt
+        self.format_schema = format_schema
 
     async def run(self) -> None:
         while True:
@@ -31,6 +33,7 @@ class InferenceWorker:
                     image,
                     self.system_prompt,
                     self.user_prompt,
+                    format=self.format_schema,
                 )
 
                 await self.result_callback(result)

@@ -4,15 +4,8 @@
     <meta charset="UTF-8">
     <title>Nexviora Live ECG</title>
     <style>
-        body { font-family: -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
-        .grid { display: grid; grid-template-columns: 3fr 1fr; gap: 20px; }
-        .panel { background: #1e293b; padding: 20px; border-radius: 8px; border: 1px solid #334155; }
-        h2 { margin-top: 0; color: #94a3b8; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
-        canvas { width: 100%; height: 300px; background: #0b0f19; border-radius: 4px; }
-        .vitals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 20px; }
-        .vital-box { background: #0f172a; padding: 15px; border-radius: 6px; text-align: center; }
-        .vital-val { font-size: 2rem; font-weight: bold; color: #38bdf8; }
-        .vital-lbl { font-size: 0.8rem; color: #64748b; }
+        body { font-family: -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+        #global-timestamp { text-align: center; font-size: 2rem; font-weight: bold; color: #94a3b8; margin-bottom: 15px; }
         
         .status-bar { display: flex; justify-content: space-between; margin-bottom: 20px; padding: 10px 20px; background: #1e293b; border-radius: 8px; }
         .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
@@ -20,12 +13,32 @@
         .bg-red { background: #991b1b; color: #fecaca; }
         .bg-yellow { background: #ca8a04; color: #fef08a; }
 
-        #events { max-height: 400px; overflow-y: auto; }
-        .event { padding: 10px; border-bottom: 1px solid #334155; font-size: 0.9rem; }
-        .event-time { color: #64748b; font-size: 0.8rem; }
+        .grid { display: grid; grid-template-columns: 3fr 1fr; gap: 20px; flex: 1; min-height: 0; }
+        .panel { background: #1e293b; padding: 20px; border-radius: 8px; border: 1px solid #334155; display: flex; flex-direction: column; }
+        h2 { margin-top: 0; color: #94a3b8; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        
+        .canvas-container { flex: 1; position: relative; min-height: 300px; }
+        canvas { position: absolute; width: 100%; height: 100%; background: #0b0f19; border-radius: 4px; }
+        
+        .vitals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 20px; }
+        .vital-box { background: #0f172a; padding: 15px; border-radius: 6px; text-align: center; }
+        .vital-val { font-size: 2rem; font-weight: bold; color: #38bdf8; }
+        .vital-lbl { font-size: 0.8rem; color: #64748b; }
+        
+        .right-panel { justify-content: flex-end; } /* Push content to bottom */
+        .events-header { margin-bottom: auto; } /* Push events list down */
+        
+        #events { max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
+        .event { padding: 12px; border-radius: 8px; font-size: 0.9rem; color: #000; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .event.normal { background: #4ade80; } /* Green */
+        .event.warning { background: #f87171; color: white; } /* Red */
+        .event.indeterminate { background: #facc15; } /* Yellow */
+        .event-time { font-size: 0.8rem; opacity: 0.8; margin-bottom: 4px; font-weight: bold; }
     </style>
 </head>
 <body>
+    <div id="global-timestamp">--:--:--</div>
+
     <div class="status-bar">
         <div>Status: <span id="conn-status" class="badge bg-yellow">CONNECTING</span></div>
         <div>Signal: <span id="sig-status" class="badge bg-green">WAITING</span></div>
@@ -34,7 +47,9 @@
     <div class="grid">
         <div class="panel">
             <h2>Live ECG</h2>
-            <canvas id="ecgChart"></canvas>
+            <div class="canvas-container">
+                <canvas id="ecgChart"></canvas>
+            </div>
             
             <div class="vitals">
                 <div class="vital-box"><div class="vital-val" id="val-hr">--</div><div class="vital-lbl">HR (BPM)</div></div>
@@ -44,10 +59,10 @@
             </div>
         </div>
         
-        <div class="panel">
-            <h2>Ischemia Detection & Events</h2>
-            <div style="margin-bottom: 10px;">
-                <button onclick="clearSession()" style="background: #334155; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">Clear Session</button>
+        <div class="panel right-panel">
+            <div class="events-header">
+                <h2>Ischemia Detection</h2>
+                <button onclick="clearSession()" style="background: #334155; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">Clear Session</button>
             </div>
             <div id="events"></div>
         </div>
@@ -56,11 +71,23 @@
     <script>
         const canvas = document.getElementById('ecgChart');
         const ctx = canvas.getContext('2d');
-        canvas.width = canvas.offsetWidth;
-        canvas.height = canvas.offsetHeight;
+        
+        // Handle resizing
+        function resizeCanvas() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
         
         let ecgBuffer = new Array(2500).fill(0); // 10 seconds at 250Hz
+        let timeBuffer = new Array(2500).fill(0); // Store timestamps for x-axis
         let ws;
+
+        // Update global clock independently
+        setInterval(() => {
+            document.getElementById('global-timestamp').innerText = new Date().toLocaleTimeString();
+        }, 1000);
 
         function connect() {
             ws = new WebSocket(`ws://${location.host}/ws/live`);
@@ -83,8 +110,14 @@
                     // Update buffer
                     if (data.filtered_samples) {
                         ecgBuffer = ecgBuffer.concat(data.filtered_samples);
+                        
+                        const nowMs = Date.now();
+                        const newTimes = Array(data.filtered_samples.length).fill(nowMs);
+                        timeBuffer = timeBuffer.concat(newTimes);
+                        
                         if (ecgBuffer.length > 2500) {
                             ecgBuffer = ecgBuffer.slice(ecgBuffer.length - 2500);
+                            timeBuffer = timeBuffer.slice(timeBuffer.length - 2500);
                         }
                     }
                     
@@ -110,6 +143,14 @@
 
         function drawECG() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw grid
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 1;
+            for(let x=0; x<canvas.width; x+=50) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+            for(let y=0; y<canvas.height; y+=50) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+
+            // Draw ECG
             ctx.beginPath();
             ctx.strokeStyle = '#4ade80';
             ctx.lineWidth = 1.5;
@@ -117,7 +158,6 @@
             const slice = ecgBuffer;
             const step = canvas.width / slice.length;
             
-            // Auto scale Y
             let min = Math.min(...slice);
             let max = Math.max(...slice);
             if (max === min) { max += 1; min -= 1; }
@@ -125,34 +165,81 @@
             
             for (let i = 0; i < slice.length; i++) {
                 const x = i * step;
-                const y = canvas.height - ((slice[i] - min) / range) * canvas.height;
+                // Leave bottom 30px for timestamps
+                const plotHeight = canvas.height - 30; 
+                const y = plotHeight - ((slice[i] - min) / range) * plotHeight;
                 if (i === 0) ctx.moveTo(x, y);
                 else ctx.lineTo(x, y);
             }
             ctx.stroke();
+
+            // Draw X-axis timestamps
+            ctx.fillStyle = '#64748b';
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'center';
+            for (let i = 0; i < slice.length; i += 500) { // Every 2 seconds (500 samples)
+                const x = i * step;
+                if (timeBuffer[i]) {
+                    const t = new Date(timeBuffer[i]);
+                    const timeStr = t.toLocaleTimeString([], {minute:'2-digit', second:'2-digit'});
+                    ctx.fillText(timeStr, x, canvas.height - 10);
+                }
+            }
         }
 
         function addEvent(evt) {
             const eventsDiv = document.getElementById('events');
             const el = document.createElement('div');
-            el.className = 'event';
-            const is_warning = evt.ischemia_detected || evt.probability > 0.5;
+            
+            const is_warning = evt.ischemia_detected;
+            const is_error = evt.error;
+            const is_indeterminate = evt.finding === 'indeterminate';
+            
+            el.className = 'event ' + (is_error || is_warning ? 'warning' : (is_indeterminate ? 'indeterminate' : 'normal'));
+            
+            let detailsHtml = '';
+            if (evt.details) {
+                const evidence = (evt.details.evidence || []).join(', ');
+                const hr = evt.details.baseline?.heart_rate_bpm || '--';
+                const quality = evt.details.image_quality || '--';
+                
+                detailsHtml = `
+                    <div style="font-size: 0.8rem; margin-top: 5px; opacity: 0.9;">
+                        <div><strong>HR:</strong> ${hr} BPM | <strong>Quality:</strong> ${quality}</div>
+                        <div style="margin-top: 4px;"><strong>Evidence:</strong> ${evidence}</div>
+                    </div>
+                `;
+            } else if (evt.error) {
+                detailsHtml = `<div style="font-size: 0.8rem;">Error: ${evt.error}</div>`;
+            }
+            
+            let findingText = evt.finding || (is_warning ? 'Warning' : 'Normal');
+            if (findingText === 'possible_ischemic_pattern') findingText = 'Possible Ischemic Pattern';
+            if (findingText === 'no_obvious_ischemic_pattern') findingText = 'No Obvious Ischemic Pattern';
+            if (findingText === 'indeterminate') findingText = 'Indeterminate';
+            
             el.innerHTML = `
-                <div class="event-time">${new Date().toLocaleTimeString()}</div>
-                <strong style="color: ${is_warning ? '#fecaca' : '#bbf7d0'}">${evt.finding || (is_warning ? 'Warning' : 'Normal')}</strong><br/>
-                Prob: ${(evt.probability || 0).toFixed(2)}
+                <div class="event-time">${new Date(evt.timestamp || Date.now()).toLocaleTimeString()}</div>
+                <strong>${findingText}</strong>
+                ${detailsHtml}
             `;
-            eventsDiv.prepend(el);
+            
+            // Append at the bottom, remove oldest if too many
+            eventsDiv.appendChild(el);
+            if (eventsDiv.children.length > 10) {
+                eventsDiv.removeChild(eventsDiv.firstChild);
+            }
+            eventsDiv.scrollTop = eventsDiv.scrollHeight; // Auto-scroll to bottom
             
             // Save to session storage
             const stored = JSON.parse(sessionStorage.getItem('events') || '[]');
-            stored.unshift(evt);
-            sessionStorage.setItem('events', JSON.stringify(stored.slice(0, 50)));
+            stored.push(evt);
+            sessionStorage.setItem('events', JSON.stringify(stored.slice(-50)));
         }
 
         function restoreEvents() {
             const stored = JSON.parse(sessionStorage.getItem('events') || '[]');
-            stored.reverse().forEach(evt => addEvent(evt));
+            stored.forEach(evt => addEvent(evt));
         }
 
         function clearSession() {
