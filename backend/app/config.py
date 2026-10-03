@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     hardware_mode: str = "wifi"  # "wifi", "serial", or "mock"
-    esp_wifi_url: str = "http://192.168.4.1"  # ESP32 Access Point IP
+    esp_wifi_url: str = "http://10.70.94.62"  # ESP32 IP on OPPO Hotspot
     esp_poll_interval_ms: float = 50.0        # Poll ESP32 HTTP data endpoint every 50ms
     serial_port: str = "/dev/ttyACM0"
     serial_baudrate: int = 115200

@@ -108,3 +108,9 @@ Thumbs.db
 # PlatformIO
 .pio/
 firmware/.pio/
+
+# Telemetry recordings and logs
+backend/recordings/*.csv
+backend/ecg_session_log.csv
+recordings/*.csv
+*.csv.bak
