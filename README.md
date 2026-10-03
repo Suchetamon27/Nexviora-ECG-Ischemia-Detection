@@ -290,4 +290,5 @@ This software and hardware specification is a **Research Prototype** created for
 
 ---
 
-## Made by Team - Nexviora for Hackspire hackathon 2026.
+
+Made by Team - Nexviora for Hackspire hackathon 2026.
