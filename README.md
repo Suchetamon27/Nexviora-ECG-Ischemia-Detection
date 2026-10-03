@@ -287,3 +287,7 @@ python laya_web_app.py
 
 ## License & Disclaimer
 This software and hardware specification is a **Research Prototype** created for biomedical telemetry and computer-aided diagnostics research. It is not FDA/CE approved as a standalone medical diagnostic system.
+
+---
+
+| Made by Team - Nexviora for Hackspire hackathon 2026.
