@@ -9,9 +9,7 @@ from fastapi.responses import JSONResponse, FileResponse
 import numpy as np
 
 from .config import settings
-from .hardware.serial_reader import SerialECGReader
 from .hardware.wifi_reader import WifiECGReader
-from .hardware.hybrid_reader import HybridECGReader
 from .hardware.continuous_recorder import continuous_recorder
 from .signal.pipeline import SignalPipeline
 from .inference.window import ECGWindow
@@ -30,9 +28,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Hybrid Hardware Telemetry Reader (Wi-Fi primary + USB Serial fallback)
-print(f"[Main] Initializing Hybrid Telemetry Reader (Wi-Fi: {settings.esp_wifi_url}, USB Serial: {settings.serial_port})...")
-reader = HybridECGReader(default_wifi_url=settings.esp_wifi_url, default_serial_port=settings.serial_port)
+# Initialize Web / Wi-Fi Telemetry Reader exclusively (No USB serial searching)
+print(f"[Main] Initializing Web/Wi-Fi Telemetry Reader ({settings.esp_wifi_url})...")
+reader = WifiECGReader(base_url=settings.esp_wifi_url)
 
 signal_pipeline = SignalPipeline()
 ecg_window = ECGWindow(
