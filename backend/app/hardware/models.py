@@ -14,3 +14,6 @@ class DevicePacket(BaseModel):
     pitch: float = 0.0
     roll: float = 0.0
     motion: float = 1.0
+    dcIr: float = 0.0
+    ampIr: float = 0.0
+    fingerDetected: bool = False

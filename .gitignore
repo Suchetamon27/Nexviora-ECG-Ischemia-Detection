@@ -104,3 +104,7 @@ backend/.venv/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# PlatformIO
+.pio/
+firmware/.pio/

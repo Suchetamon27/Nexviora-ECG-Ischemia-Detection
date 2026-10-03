@@ -3,6 +3,7 @@ import json
 import time
 import math
 import random
+import re
 import serial
 from typing import AsyncGenerator, Optional, List
 
@@ -17,6 +18,7 @@ class SerialECGReader:
         self._serial: Optional[serial.Serial] = None
         self.mock_mode = settings.hardware_mode == "mock"
         self.is_streaming = False
+        self.discovered_wifi_ip: Optional[str] = None
 
     def connect(self) -> bool:
         if self.mock_mode:
@@ -155,6 +157,14 @@ class SerialECGReader:
                     continue
 
                 decoded = line.decode("utf-8", errors="ignore").strip()
+                if "Local IP:" in decoded or "http://" in decoded:
+                    m = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", decoded)
+                    if m:
+                        ip = m.group(1)
+                        if ip != "192.168.4.1":
+                            self.discovered_wifi_ip = f"http://{ip}"
+                            print(f"[SerialReader] Intercepted ESP32 Wi-Fi IP from Serial: {self.discovered_wifi_ip}")
+
                 if decoded.startswith("REC,") or decoded.startswith("#"):
                     pass # regular traffic
                 else:

@@ -5,16 +5,20 @@ from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, WebSocket, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import numpy as np
 
 from .config import settings
 from .hardware.serial_reader import SerialECGReader
+from .hardware.wifi_reader import WifiECGReader
+from .hardware.hybrid_reader import HybridECGReader
+from .hardware.continuous_recorder import continuous_recorder
 from .signal.pipeline import SignalPipeline
 from .inference.window import ECGWindow
 from .streaming.manager import stream_manager
 from .inference.laya_client import LayaClient
 from .inference.worker import InferenceWorker
+from .inference.logger import log_chunk_to_csv, CSV_FILE_PATH, init_csv_file
 
 app = FastAPI(title="Nexviora Live Clinical ECG Ischemia Backend")
 
@@ -26,7 +30,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-reader = SerialECGReader(port=settings.serial_port, baudrate=settings.serial_baudrate)
+# Initialize Hybrid Hardware Telemetry Reader (Wi-Fi primary + USB Serial fallback)
+print(f"[Main] Initializing Hybrid Telemetry Reader (Wi-Fi: {settings.esp_wifi_url}, USB Serial: {settings.serial_port})...")
+reader = HybridECGReader(default_wifi_url=settings.esp_wifi_url, default_serial_port=settings.serial_port)
+
 signal_pipeline = SignalPipeline()
 ecg_window = ECGWindow(
     sampling_rate=settings.sampling_rate,
@@ -43,6 +50,8 @@ session_history: List[Dict[str, Any]] = []
 async def handle_chunk_result(result: dict):
     """Callback from InferenceWorker when a 5-second chunk is processed."""
     session_history.append(result)
+    # Log chunk diagnostic result to persistent CSV file
+    log_chunk_to_csv(result)
     # Broadcast to all connected WebSockets
     await stream_manager.broadcast(result)
 
@@ -53,36 +62,174 @@ worker = InferenceWorker(
     signal_pipeline=signal_pipeline
 )
 
+@app.get("/api/session/download-csv")
+async def download_csv():
+    """Returns the recorded chunk CSV log file for inspection."""
+    init_csv_file()
+    return FileResponse(
+        path=CSV_FILE_PATH,
+        filename="ecg_session_log.csv",
+        media_type="text/csv"
+    )
+
+@app.get("/api/session/export-full-csv")
+async def export_full_session_csv():
+    """Generates and downloads full resolution continuous CSV containing all accumulated ECG samples in session."""
+    from fastapi.responses import Response
+    if not worker.session_csv_chunks:
+        if continuous_recorder.current_file_path and os.path.exists(continuous_recorder.current_file_path):
+            return FileResponse(
+                path=continuous_recorder.current_file_path,
+                filename=f"nexviora_ecg_continuous_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv",
+                media_type="text/csv"
+            )
+        return JSONResponse({"status": "empty", "message": "No session telemetry data captured yet."}, status_code=400)
+    
+    csv_lines = ["sample_index,timestamp_ms,ecg_adc,ecg_mv,chunk_id"]
+    sample_idx = 0
+    now_ms = int(datetime.utcnow().timestamp() * 1000) - (len(worker.session_csv_chunks) * 3000)
+    
+    for item in worker.session_csv_chunks:
+        c_id = item.get("chunk_id", 0)
+        samples = item.get("cleaned_ecg", [])
+        for s in samples:
+            val_adc = round(float(s), 2)
+            val_mv = round((val_adc - 2048.0) / 1365.0, 4)
+            t_ms = now_ms + int(sample_idx * 4)
+            csv_lines.append(f"{sample_idx},{t_ms},{val_adc},{val_mv},Chunk_{c_id}")
+            sample_idx += 1
+            
+    content = "\n".join(csv_lines)
+    filename = f"nexviora_ecg_session_full_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.get("/api/recordings/list")
+async def list_recordings():
+    """Lists all continuous telemetry CSV recordings in the recordings folder."""
+    recordings_dir = continuous_recorder.output_dir
+    files = []
+    if os.path.exists(recordings_dir):
+        for fname in os.listdir(recordings_dir):
+            if fname.endswith(".csv"):
+                fpath = os.path.join(recordings_dir, fname)
+                stat = os.stat(fpath)
+                files.append({
+                    "filename": fname,
+                    "size_bytes": stat.st_size,
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "download_url": f"/api/recordings/download/{fname}"
+                })
+    files.sort(key=lambda x: x["created_at"], reverse=True)
+    return {
+        "active_recording": continuous_recorder.current_file_path,
+        "is_recording": continuous_recorder.is_recording,
+        "count": len(files),
+        "files": files
+    }
+
+@app.get("/api/recordings/download/{filename}")
+async def download_recording(filename: str):
+    """Downloads a specific continuous CSV recording file."""
+    filepath = os.path.abspath(os.path.join(continuous_recorder.output_dir, filename))
+    if not filepath.startswith(continuous_recorder.output_dir) or not os.path.exists(filepath):
+        return JSONResponse({"status": "error", "message": "File not found"}, status_code=404)
+    return FileResponse(
+        path=filepath,
+        filename=filename,
+        media_type="text/csv"
+    )
+
+@app.post("/api/config/wifi")
+async def update_wifi_config(payload: Dict[str, Any] = Body(...)):
+    """Updates the target ESP32 Wi-Fi URL dynamically."""
+    url = payload.get("url")
+    if url:
+        settings.esp_wifi_url = url.strip()
+        if hasattr(reader, "set_esp_url"):
+            reader.set_esp_url(settings.esp_wifi_url)
+        return {"status": "updated", "esp_wifi_url": settings.esp_wifi_url}
+    return JSONResponse({"status": "error", "message": "Missing url parameter"}, status_code=400)
+
+@app.post("/api/config/discover-esp")
+async def discover_esp():
+    """Triggers auto-discovery scanner to find ESP32 IP on local network."""
+    if hasattr(reader, "auto_discover_esp32_ip"):
+        found_url = await reader.auto_discover_esp32_ip()
+        if found_url:
+            return {"status": "found", "esp_url": found_url}
+        return {"status": "not_found", "message": "ESP32 not found on local network subnets"}
+    return JSONResponse({"status": "error", "message": "Auto-discovery not supported in this mode"}, status_code=400)
+
 @app.get("/health")
 async def health():
+    active_mode = getattr(reader, "active_mode", "disconnected")
+    status_message = getattr(reader, "status_message", "Initializing...")
+    is_connected = getattr(reader, "is_connected", False)
+    discovered_ip = getattr(reader, "discovered_ip", None)
+
     return {
         "status": "ok",
-        "hardware_mode": settings.hardware_mode,
-        "serial_connected": reader._serial is not None and reader._serial.is_open,
+        "active_mode": active_mode,
+        "is_connected": is_connected,
+        "status_message": status_message,
+        "esp_wifi_url": settings.esp_wifi_url,
+        "discovered_ip": discovered_ip,
+        "serial_port": settings.serial_port,
         "is_streaming": reader.is_streaming,
+        "is_continuous_recording": continuous_recorder.is_recording,
+        "active_recording_file": continuous_recorder.current_file_path,
         "sampling_rate": settings.sampling_rate,
-        "inference_window_s": settings.inference_window_seconds,
-        "noise_rejection_threshold": settings.noise_rejection_threshold,
-        "session_chunks_count": len(session_history)
+        "session_chunks_count": len(session_history),
+        "session_buffer_count": len(worker.session_csv_chunks),
+        "session_buffer_sec": len(worker.session_csv_chunks) * 3.0
     }
 
 @app.post("/api/stream/start")
 async def start_stream():
+    new_csv_path = continuous_recorder.start_new_recording()
     success = reader.start_stream()
     return {
         "status": "streaming" if success else "started",
-        "port": settings.serial_port,
-        "mock_mode": reader.mock_mode
+        "hardware_mode": settings.hardware_mode,
+        "recording_csv": new_csv_path
     }
 
 @app.post("/api/stream/stop")
 async def stop_stream():
+    saved_csv = continuous_recorder.stop_recording()
     reader.stop_stream()
-    return {"status": "stopped"}
+    return {
+        "status": "stopped",
+        "saved_csv": saved_csv
+    }
+
+@app.post("/api/llm/analyze")
+async def trigger_llm_analyze():
+    """
+    Manually triggered when user clicks 'Send to LLM'.
+    Packages all accumulated 3s CSV telemetry chunks in memory and sends to meta/muse-glimmer-30b.
+    """
+    res = await worker.analyze_session_with_llm()
+    if res.get("status") == "empty":
+        return JSONResponse({"status": "empty", "message": res["message"]}, status_code=400)
+    elif res.get("status") == "busy":
+        return JSONResponse({"status": "busy", "message": res["message"]}, status_code=429)
+    return res
+
+@app.post("/api/llm/clear")
+async def clear_llm_buffer():
+    """Clears accumulated 3s CSV telemetry buffer in worker."""
+    count = worker.clear_session_buffer()
+    return {"status": "cleared", "count": count}
 
 @app.post("/api/session/clear")
 async def clear_session():
     session_history.clear()
+    worker.clear_session_buffer()
     return {"status": "cleared"}
 
 @app.post("/api/session/analyze")
@@ -191,15 +338,26 @@ async def acquisition_loop():
         now_us = int(datetime.utcnow().timestamp() * 1e6)
         processed = signal_pipeline.process(packet, now_us)
 
+        # Record all samples continuously into active CSV file
+        continuous_recorder.record_packet(
+            packet=packet,
+            cleaned_samples=processed.filtered_ecg,
+            quality_status=processed.signal_quality
+        )
+
         # Broadcast live waveform packet to frontend for smooth chart rendering
         await stream_manager.broadcast({
             "type": "ecg",
             "timestamp": now_us,
             "samples": processed.raw_ecg,
             "filtered_samples": processed.filtered_ecg,
+            "ir_samples": packet.ir,
             "ecg_hr": packet.ecgHr,
             "hr": packet.hr,
             "spo2": packet.spo2,
+            "dc_ir": packet.dcIr,
+            "amp_ir": packet.ampIr,
+            "finger_detected": packet.fingerDetected,
             "pitch": packet.pitch,
             "roll": packet.roll,
             "motion": packet.motion,
